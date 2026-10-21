@@ -18,8 +18,6 @@
     .job-card.failed { border-top-color: #dc3545; background-color: #fff8f8; }
     .evidence-img { width: 100%; border-radius: 4px; margin-top: 8px; border: 2px solid #dc3545; cursor: pointer; }
     .evidence-img:hover { opacity: 0.8; }
-    
-    /* Evidence Manager Styles */
     .evidence-manager { background: #fff; border: 1px solid #ddd; border-radius: 8px; margin-bottom: 20px; }
     .evidence-header { padding: 15px; cursor: pointer; display: flex; justify-content: space-between; align-items: center; font-weight: bold; background: #f8f9fa; border-radius: 8px; }
     .evidence-body { padding: 15px; border-top: 1px solid #ddd; display: none; }
@@ -35,22 +33,23 @@
 </nav>
 
 <div class="container-fluid">
-  <!-- Top Controls -->
   <div class="row mb-3">
     <div class="col-12">
       <div class="card shadow-sm">
         <div class="card-body d-flex align-items-center gap-3">
-          <input type="file" id="fileInput" class="form-control" style="max-width: 300px;" accept=".xlsx,.json" />
+          <input type="file" id="fileInput" class="form-control" style="max-width: 250px;" accept=".xlsx,.json" />
           <button id="uploadBtn" class="btn btn-secondary">1. Upload File</button>
+          
           <button id="startBtn" class="btn btn-primary" disabled>2. Start Jobs</button>
+          <button id="retryBtn" class="btn btn-warning" style="display: none;">🔄 Retry Failed</button>
           <button id="stopBtn" class="btn btn-danger" style="display: none;">🛑 Stop Process</button>
+          
           <button id="downloadBtn" class="btn btn-success ms-auto" disabled>3. Download Excel Report</button>
         </div>
       </div>
     </div>
   </div>
 
-  <!-- NEW: Evidence Manager Accordion -->
   <div class="row mb-3">
     <div class="col-12">
       <div class="evidence-manager">
@@ -59,7 +58,7 @@
           <span id="evidenceToggleIcon">▼</span>
         </div>
         <div class="evidence-body" id="evidenceBody">
-          <p class="text-muted mb-3">Download all screenshots from the current run, or clear them to free up space before the next run.</p>
+          <p class="text-muted mb-3">Download all screenshots from the current run, or clear them to free up space.</p>
           <button id="downloadEvidenceBtn" class="btn btn-success me-2">⬇️ Download Evidence</button>
           <button id="deleteEvidenceBtn" class="btn btn-danger">🗑️ Delete Evidence</button>
         </div>
@@ -67,11 +66,17 @@
     </div>
   </div>
 
-  <!-- Progress Bar -->
   <div class="row mb-4" id="progressContainer" style="display: none;">
     <div class="col-12">
-      <div class="d-flex justify-content-between mb-1">
-        <span class="fw-bold text-muted">Overall Progress</span>
+      <div class="d-flex justify-content-between align-items-end mb-1">
+        <div>
+          <span class="fw-bold text-muted me-3">Overall Progress</span>
+          <!-- NEW: Filter Toggle -->
+          <div class="form-check form-check-inline">
+            <input class="form-check-input" type="checkbox" id="filterFailed">
+            <label class="form-check-label text-danger fw-bold" for="filterFailed" style="cursor: pointer;">Show Failed Only</label>
+          </div>
+        </div>
         <span class="fw-bold" id="progressText">0 / 0</span>
       </div>
       <div class="progress" style="height: 20px;">
@@ -81,14 +86,12 @@
   </div>
 
   <div class="row">
-    <!-- Left Side: Terminal -->
     <div class="col-md-4 mb-4">
       <div class="terminal" id="terminalBox">
         <div class="terminal-line">System Ready...</div>
       </div>
     </div>
 
-    <!-- Right Side: Job Cards -->
     <div class="col-md-8">
       <div class="row" id="jobContainer">
         <div class="col-12 text-muted text-center mt-5">No jobs running. Upload a file and click Start.</div>
@@ -100,13 +103,13 @@
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
 
 <script>
-  // ... (Keep all your existing variables and event listeners for file upload, start, stop, and poll) ...
-  
   const fileInput = document.getElementById('fileInput');
   const uploadBtn = document.getElementById('uploadBtn');
   const startBtn = document.getElementById('startBtn');
+  const retryBtn = document.getElementById('retryBtn');
   const stopBtn = document.getElementById('stopBtn');
   const downloadBtn = document.getElementById('downloadBtn');
+  const filterFailedCheckbox = document.getElementById('filterFailed');
   const terminalBox = document.getElementById('terminalBox');
   const jobContainer = document.getElementById('jobContainer');
   const progressContainer = document.getElementById('progressContainer');
@@ -116,8 +119,9 @@
   let localLogs = [];
   let lastRenderedBatch = ''; 
   let isNewFileSelected = false;
+  let filterFailedOnly = false;
 
-  // --- NEW: Evidence Manager Logic ---
+  // Evidence Manager Logic
   function toggleEvidence() {
     const body = document.getElementById('evidenceBody');
     const icon = document.getElementById('evidenceToggleIcon');
@@ -125,24 +129,18 @@
     icon.textContent = body.classList.contains('show') ? '▲' : '▼';
   }
 
-  document.getElementById('downloadEvidenceBtn').addEventListener('click', () => {
-    window.location.href = '/api/download-evidence';
+  document.getElementById('downloadEvidenceBtn').addEventListener('click', () => window.location.href = '/api/download-evidence');
+  document.getElementById('deleteEvidenceBtn').addEventListener('click', async () => {
+    if (!confirm('Are you sure you want to delete all evidence?')) return;
+    await fetch('/api/delete-evidence', { method: 'DELETE' });
+    alert('Evidence folder cleared!');
   });
 
-  document.getElementById('deleteEvidenceBtn').addEventListener('click', async () => {
-    if (!confirm('Are you sure you want to delete all evidence screenshots? Make sure you downloaded them first!')) return;
-    
-    try {
-      const res = await fetch('/api/delete-evidence', { method: 'DELETE' });
-      const data = await res.json();
-      if (data.ok) {
-        alert('Evidence folder cleared successfully!');
-      }
-    } catch (err) {
-      alert('Failed to delete evidence.');
-    }
+  // Filter Toggle
+  filterFailedCheckbox.addEventListener('change', (e) => {
+    filterFailedOnly = e.target.checked;
+    lastRenderedBatch = ''; // Force re-render immediately
   });
-  // ------------------------------------
 
   fileInput.addEventListener('change', () => {
     if (fileInput.files.length > 0) {
@@ -178,19 +176,29 @@
     }
   });
 
-  startBtn.addEventListener('click', async () => {
+  async function triggerStart(isRetry) {
     startBtn.disabled = true;
+    retryBtn.disabled = true;
     stopBtn.style.display = 'inline-block';
     lastRenderedBatch = ''; 
     try {
-      await fetch('/api/start', { method: 'POST' });
+      const res = await fetch('/api/start', { 
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ retryFailed: isRetry })
+      });
+      if (!res.ok) throw new Error(await res.text());
       downloadBtn.disabled = true;
     } catch (err) {
       alert('Failed to start: ' + err.message);
       startBtn.disabled = false;
+      retryBtn.disabled = false;
       stopBtn.style.display = 'none';
     }
-  });
+  }
+
+  startBtn.addEventListener('click', () => triggerStart(false));
+  retryBtn.addEventListener('click', () => triggerStart(true));
 
   stopBtn.addEventListener('click', async () => {
     stopBtn.disabled = true;
@@ -217,6 +225,8 @@
         if (isScrolledToBottom) terminalBox.scrollTop = terminalBox.scrollHeight; 
       }
 
+      const hasFailures = data.batchProgress && data.batchProgress.some(j => j.status === 'Failed');
+
       if (data.status === 'idle' && data.parsedData.length > 0) {
         if (!isNewFileSelected) {
           uploadBtn.disabled = true; 
@@ -227,8 +237,18 @@
           startBtn.disabled = true;
         }
         stopBtn.style.display = 'none';
+        
+        // Show/Hide Retry Button
+        if (hasFailures) {
+          retryBtn.style.display = 'inline-block';
+          retryBtn.disabled = false;
+        } else {
+          retryBtn.style.display = 'none';
+        }
+
       } else if (data.status === 'Running') {
         startBtn.disabled = true;
+        retryBtn.style.display = 'none';
         stopBtn.style.display = 'inline-block';
         downloadBtn.disabled = true;
       }
@@ -243,12 +263,24 @@
         progressContainer.style.display = 'none';
       }
 
+      // Handle Job Cards with Filtering
       if (data.batchProgress && data.batchProgress.length > 0 && !isNewFileSelected) {
-        const currentStateString = JSON.stringify(data.batchProgress);
+        // We append the filter state to the string so the UI re-renders when the checkbox changes
+        const currentStateString = JSON.stringify(data.batchProgress) + filterFailedOnly;
+        
         if (currentStateString !== lastRenderedBatch) {
           lastRenderedBatch = currentStateString;
+          
           let html = '';
-          data.batchProgress.forEach((job) => html += generateJobCardHtml(job));
+          data.batchProgress.forEach((job) => {
+            if (filterFailedOnly && job.status !== 'Failed') return; // Skip passed jobs if filter is on
+            html += generateJobCardHtml(job);
+          });
+          
+          if (html === '') {
+            html = `<div class="col-12 text-success text-center mt-5 fw-bold">🎉 No failed jobs! Everything passed.</div>`;
+          }
+          
           jobContainer.innerHTML = html;
         }
       } else if (!isNewFileSelected) {
@@ -265,7 +297,7 @@
     if (job.status === 'Failed') { badgeClass = 'bg-danger'; cardClass = 'failed'; }
 
     let evidenceHtml = '';
-    if (job.status === 'Failed') {
+        if (job.status === 'Failed') {
       const cacheBuster = Date.now();
       evidenceHtml = `
         <div class="mt-3">
@@ -274,11 +306,16 @@
           </button>
           <div class="collapse" id="evidence-${job.jobId}">
             <div class="mt-2">
+              <!-- The failure state is always taken -->
               <a href="/evidence/${job.jobId}/99_Failure_State.png" target="_blank">
-                <img src="/evidence/${job.jobId}/99_Failure_State.png?t=${cacheBuster}" class="evidence-img" alt="Failure">
+                <img src="/evidence/${job.jobId}/99_Failure_State.png?t=${cacheBuster}" class="evidence-img" alt="Failure" onerror="this.style.display='none'">
               </a>
+              <!-- These will only show if the script actually reached them -->
               <a href="/evidence/${job.jobId}/01_Project_Created.png" target="_blank">
-                <img src="/evidence/${job.jobId}/01_Project_Created.png?t=${cacheBuster}" class="evidence-img" alt="Input">
+                <img src="/evidence/${job.jobId}/01_Project_Created.png?t=${cacheBuster}" class="evidence-img" alt="Input" onerror="this.style.display='none'">
+              </a>
+              <a href="/evidence/${job.jobId}/02_Transmitted_Success.png" target="_blank">
+                <img src="/evidence/${job.jobId}/02_Transmitted_Success.png?t=${cacheBuster}" class="evidence-img" alt="Submit" onerror="this.style.display='none'">
               </a>
             </div>
           </div>

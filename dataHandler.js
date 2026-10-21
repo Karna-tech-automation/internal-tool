@@ -67,5 +67,51 @@ async function writeReport(results, outputPath) {
 
   await workbook.xlsx.writeFile(outputPath);
 }
+// Add this to the bottom of dataHandler.js
+async function writeHtmlReport(results, outputPath) {
+  let tableRows = '';
+  results.forEach(r => {
+    const statusColor = r.Status === 'Passed' ? '#d4edda' : '#f8d7da';
+    tableRows += `
+      <tr style="background-color: ${statusColor};">
+        <td>${r["Job Name"]}</td>
+        <td>${r["Project Name"]}</td>
+        <td>${r["Environment"]}</td>
+        <td>${r.Office}</td>
+        <td><strong>${r.Status}</strong></td>
+        <td>${r["Extracted Project Number"]}</td>
+        <td>${r["Extracted Page Job Name"]}</td>
+      </tr>
+    `;
+  });
 
-module.exports = { readInput, writeReport };
+  const html = `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <title>Automation Test Report</title>
+      <style>
+        body { font-family: Arial, sans-serif; margin: 40px; }
+        table { border-collapse: collapse; width: 100%; }
+        th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+        th { background-color: #343a40; color: white; }
+      </style>
+    </head>
+    <body>
+      <h1>Test Execution Report</h1>
+      <p>Generated on: ${new Date().toLocaleString()}</p>
+      <table>
+        <tr>
+          <th>Job Name</th><th>Project Name</th><th>Environment</th>
+          <th>Office</th><th>Status</th><th>Extracted Project #</th><th>Extracted Job Name</th>
+        </tr>
+        ${tableRows}
+      </table>
+    </body>
+    </html>
+  `;
+  
+  require('fs').writeFileSync(outputPath, html);
+}
+
+module.exports = { readInput, writeReport, writeHtmlReport };

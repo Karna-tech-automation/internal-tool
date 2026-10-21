@@ -1,0 +1,8 @@
+[
+  {
+    "ProjectName": "Dynamic_Login_Test",
+    "Environment": "QA",
+    "Office": "NY",
+    "Steps": "[{\"action\":\"app_login\"},{\"action\":\"goto\",\"selector\":\"https://opensource-demo.orangehrmlive.com/web/index.php/pim/addEmployee\"},{\"action\":\"waitForURL\",\"value\":\"**/pim/addEmployee\"},{\"action\":\"wait\",\"value\":\"2000\"},{\"action\":\"waitForSelector\",\"selector\":\"input[name='firstName']\"},{\"action\":\"fill\",\"selector\":\"input[name='firstName']\",\"value\":\"Alice\"},{\"action\":\"fill\",\"selector\":\"input[name='lastName']\",\"value\":\"Smith\"},{\"action\":\"screenshot\",\"selector\":\"input[name='firstName']\",\"value\":\"01_Form_Filled\"},{\"action\":\"click\",\"selector\":\"button[type='submit']\"},{\"action\":\"waitForSelector\",\"selector\":\".oxd-toast--success\"},{\"action\":\"screenshot\",\"selector\":\".oxd-toast--success\",\"value\":\"02_Success\"}]"
+  }
+]

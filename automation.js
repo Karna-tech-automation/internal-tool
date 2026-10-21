@@ -11,93 +11,139 @@
 //   const locator = page.locator(selector).first(); 
 //   await locator.waitFor({ state: 'visible', timeout: 15000 });
 
-//   // 1. Inject the red highlight AND wait for the browser to paint it
-//   await locator.evaluate(async (el) => {
-//     el.style.outline = '4px solid red';
-//     el.style.boxShadow = '0 0 10px red';
-    
-//     // Force the browser to calculate the new layout (reflow)
-//     el.getBoundingClientRect();
-    
-//     // Wait for the next animation frame (the actual paint)
-//     await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+//   await locator.evaluate((el) => {
+//     el.style.outline = '5px solid red';
+//     el.style.boxShadow = '0 0 15px red';
+//     el.style.zIndex = '9999';
+//     el.style.position = 'relative';
 //   });
 
-//   // 2. Take the screenshot (no hard waits!)
+//   await page.waitForTimeout(200);
+
 //   const screenshotPath = path.join(evidenceDir, `${actionName}.png`);
 //   await page.screenshot({ path: screenshotPath, fullPage: true });
 
-//   // 3. Remove the highlight
 //   await locator.evaluate((el) => {
 //     el.style.outline = '';
 //     el.style.boxShadow = '';
+//     el.style.zIndex = '';
+//     el.style.position = '';
 //   });
 // }
 
 // async function runJob(rowData, jobId) {
 //   const startTime = Date.now();
   
-//   // --- FIX 1: DELETE OLD EVIDENCE SO NO GHOST IMAGES SHOW UP ---
 //   const evidenceDir = path.join(__dirname, 'evidence', jobId);
 //   if (fs.existsSync(evidenceDir)) {
 //     fs.rmSync(evidenceDir, { recursive: true, force: true });
 //   }
 //   fs.mkdirSync(evidenceDir, { recursive: true });
-//   // ------------------------------------------------------------
 
-//   const browser = await chromium.launch({ headless: false });
+//   const isHeadless = process.env.HEADLESS === 'true';
+//   const browser = await chromium.launch({ headless: isHeadless });
 //   activeBrowsers.add(browser);
   
 //   const context = await browser.newContext({ ignoreHTTPSErrors: true });
 //   const page = await context.newPage();
 
 //   try {
-//     const targetUrl = process.env.STAGE_URL || 'https://opensource-demo.orangehrmlive.com/web/index.php/auth/login';
-//     const username = process.env.STAGE_USERNAME || 'Admin';
-//     const password = process.env.STAGE_PASSWORD || 'admin123';
-//     const firstNameToCreate = rowData.InputValue || rowData.ProjectName || 'John';
+//     let steps = [];
+//     if (typeof rowData.Steps === 'string') {
+//       try {
+//         steps = JSON.parse(rowData.Steps);
+//       } catch (e) {
+//         throw new Error("Invalid JSON format in the 'Steps' column.");
+//       }
+//     } else if (Array.isArray(rowData.Steps)) {
+//       steps = rowData.Steps;
+//     } else {
+//       throw new Error("No 'Steps' provided for this job.");
+//     }
 
-//     // --- 1. LOGIN FLOW ---
-//     await page.goto(targetUrl, { timeout: 30000 });
-    
-//     await page.fill('input[name="username"]', username);
-//     await page.fill('input[name="password"]', password);
-//     await page.click('button[type="submit"]');
-    
-//     await page.waitForSelector('.oxd-topbar-header-breadcrumb', { timeout: 15000 });
+//     if (steps.length === 0) throw new Error("Steps array is empty.");
 
-//     // --- 2. NAVIGATE TO CREATE ---
-//     await page.click('span:has-text("PIM")');
-//     await page.waitForSelector('a:has-text("Add Employee")');
-//     await page.click('a:has-text("Add Employee")');
+//     for (const step of steps) {
+//       const action = step.action.toLowerCase();
+//       let value = step.value || '';
 
-//     // --- 3. FILL DATA ---
-//     await page.waitForSelector('input[name="firstName"]');
-//     await page.fill('input[name="firstName"]', firstNameToCreate);
-//     await page.fill('input[name="lastName"]', 'TestUser');
-    
-//     await takeEvidence(page, 'input[name="firstName"]', '01_Project_Created', jobId);
+//       // Environment Variable replacement (e.g., {{STAGE_USERNAME}})
+//       if (value.startsWith('{{') && value.endsWith('}}')) {
+//         const envKey = value.replace('{{', '').replace('}}', '');
+//         value = process.env[envKey] || value;
+//       }
 
-//     // --- 4. TRANSMIT (SAVE) ---
-//     await page.click('button[type="submit"]');
-//     await page.waitForSelector('.oxd-toast--success', { timeout: 10000 });
-    
-//     await takeEvidence(page, '.oxd-toast--success', '02_Transmitted_Success', jobId);
+//       console.log(`[${jobId}] Executing: ${action} on ${step.selector || ''}`);
+
+//       // THIS IS THE SWITCH BLOCK YOU WERE MISSING
+//       switch (action) {
+//         case 'goto':
+//           await page.goto(step.selector, { timeout: 30000 });
+//           break;
+          
+//         case 'app_login':
+//           const url = process.env.STAGE_URL;
+//           const username = process.env.STAGE_USERNAME;
+//           const password = process.env.STAGE_PASSWORD;
+          
+//           if (!url || !username || !password) {
+//             throw new Error("Missing STAGE_URL, STAGE_USERNAME, or STAGE_PASSWORD in .env file.");
+//           }
+
+//           await page.goto(url, { timeout: 30000 });
+//           await page.fill('input[name="username"]', username);
+//           await page.fill('input[name="password"]', password);
+//           await page.click('button[type="submit"]');
+//           await page.waitForSelector('.oxd-topbar-header-breadcrumb', { timeout: 20000 });
+//           break;
+
+//         case 'fill':
+//           // Wait for the input to be visible before trying to type
+//           await page.waitForSelector(step.selector, { state: 'visible', timeout: 15000 });
+//           await page.fill(step.selector, value.toString());
+//           break;
+          
+//         case 'click':
+//           // Wait for the button/link to be visible before clicking
+//           await page.waitForSelector(step.selector, { state: 'visible', timeout: 15000 });
+//           await page.click(step.selector);
+//           break;
+          
+//         case 'wait':
+//           await page.waitForTimeout(parseInt(value) || 1000);
+//           break;
+        
+//         case 'waitforurl':
+//           await page.waitForURL(value, { timeout: 15000 });
+//           break;
+          
+//         case 'waitforselector':
+//           await page.waitForSelector(step.selector, { state: 'visible', timeout: 15000 });
+//           break;
+          
+//         case 'press':
+//           await page.press(step.selector, value);
+//           break;
+          
+//         case 'screenshot':
+//           await takeEvidence(page, step.selector, value || 'Screenshot', jobId);
+//           break;
+          
+//         default:
+//           throw new Error(`Unknown action: '${step.action}'`);
+//       }
+//     }
 
 //     return { 
 //       status: 'Passed', 
-//       message: `Employee ${firstNameToCreate} created successfully`,
+//       message: `Completed ${steps.length} steps successfully`,
 //       duration: ((Date.now() - startTime) / 1000).toFixed(1) + 's'
 //     };
 
 //   } catch (error) {
-//     // --- FIX 2: TAKE SCREENSHOT ON FAILURE ---
 //     try {
 //       await page.screenshot({ path: path.join(evidenceDir, '99_Failure_State.png'), fullPage: true });
-//     } catch (e) {
-//       console.log("Could not take failure screenshot");
-//     }
-//     // ----------------------------------------
+//     } catch (e) {}
 
 //     return { 
 //       status: 'Failed', 
@@ -119,8 +165,6 @@
 
 // module.exports = { runJob, stopAllBrowsers };
 
-
-
 const { chromium } = require('playwright');
 const fs = require('fs');
 const path = require('path');
@@ -132,10 +176,8 @@ async function takeEvidence(page, selector, actionName, jobId) {
   fs.mkdirSync(evidenceDir, { recursive: true });
 
   const locator = page.locator(selector).first(); 
-  // Wait for the element to be in the DOM and visible
   await locator.waitFor({ state: 'visible', timeout: 15000 });
 
-  // Inject a highly visible red highlight and bring to front
   await locator.evaluate((el) => {
     el.style.outline = '5px solid red';
     el.style.boxShadow = '0 0 15px red';
@@ -143,14 +185,11 @@ async function takeEvidence(page, selector, actionName, jobId) {
     el.style.position = 'relative';
   });
 
-  // Wait 200ms just to guarantee the browser paints the red box on the screen
   await page.waitForTimeout(200);
 
-  // Take the screenshot
   const screenshotPath = path.join(evidenceDir, `${actionName}.png`);
   await page.screenshot({ path: screenshotPath, fullPage: true });
 
-  // Remove the highlight
   await locator.evaluate((el) => {
     el.style.outline = '';
     el.style.boxShadow = '';
@@ -163,76 +202,89 @@ async function runJob(rowData, jobId) {
   const startTime = Date.now();
   
   const evidenceDir = path.join(__dirname, 'evidence', jobId);
-  if (fs.existsSync(evidenceDir)) {
-    fs.rmSync(evidenceDir, { recursive: true, force: true });
-  }
+  if (fs.existsSync(evidenceDir)) fs.rmSync(evidenceDir, { recursive: true, force: true });
   fs.mkdirSync(evidenceDir, { recursive: true });
 
-  const browser = await chromium.launch({ headless: false });
+  const isHeadless = process.env.HEADLESS === 'true';
+  const browser = await chromium.launch({ headless: isHeadless });
   activeBrowsers.add(browser);
   
   const context = await browser.newContext({ ignoreHTTPSErrors: true });
   const page = await context.newPage();
 
   try {
-    const targetUrl = process.env.STAGE_URL || 'https://opensource-demo.orangehrmlive.com/web/index.php/auth/login';
-    const username = process.env.STAGE_USERNAME || 'Admin';
-    const password = process.env.STAGE_PASSWORD || 'admin123';
-    const firstNameToCreate = rowData.InputValue || rowData.ProjectName || 'John';
+    let result;
 
-    // --- 1. LOGIN FLOW ---
-    await page.goto(targetUrl, { timeout: 30000 });
-    await page.fill('input[name="username"]', username);
-    await page.fill('input[name="password"]', password);
-    await page.click('button[type="submit"]');
-    
-    // Wait for dashboard
-    await page.waitForSelector('.oxd-topbar-header-breadcrumb', { timeout: 15000 });
+   // --- ROUTER: Check if we are running a custom JS Test or a JSON Step ---
+    if (rowData.TestName) {
+      try {
+        // 1. Dynamically find the test file based on the TestName in Excel
+        const testFilePath = path.join(__dirname, 'tests', `${rowData.TestName}.js`);
+        
+        if (!fs.existsSync(testFilePath)) {
+          throw new Error(`Test file not found: tests/${rowData.TestName}.js`);
+        }
 
-    // --- 2. NAVIGATE TO CREATE ---
-    await page.click('span:has-text("PIM")');
-    await page.waitForSelector('a:has-text("Add Employee")');
-    await page.click('a:has-text("Add Employee")');
+        const testModule = require(testFilePath);
+        
+        // 2. Find the function (e.g., if TestName is "CreateProject", look for "runCreateProject")
+        const functionName = `run${rowData.TestName}`;
+        const runTestFunction = testModule[functionName];
 
-    // --- THE CRUCIAL FIX: WAIT FOR SPINNERS TO DISAPPEAR ---
-    // OrangeHRM uses a spinner overlay while loading pages. We must wait for it to hide.
-    await page.waitForTimeout(1000); // Give the SPA a second to start routing
-    await page.locator('.oxd-loading-spinner').waitFor({ state: 'hidden', timeout: 10000 }).catch(() => {});
-    await page.waitForSelector('input[name="firstName"]', { state: 'visible' });
-    // -------------------------------------------------------
+        if (typeof runTestFunction !== 'function') {
+          throw new Error(`Function '${functionName}' not found in tests/${rowData.TestName}.js`);
+        }
 
-    // --- 3. FILL DATA ---
-    await page.fill('input[name="firstName"]', firstNameToCreate);
-    await page.fill('input[name="lastName"]', 'TestUser');
-    
-    // Take screenshot (now that the page is fully loaded)
-    await takeEvidence(page, 'input[name="firstName"]', '01_Project_Created', jobId);
+        // 3. Execute the test and pass the page and data
+        result = await runTestFunction(page, rowData, jobId);
 
-    // --- 4. TRANSMIT (SAVE) ---
-    await page.click('button[type="submit"]');
-    
-    // Wait for the toast
-    await page.waitForSelector('.oxd-toast--success', { timeout: 10000 });
-    
-    // Take screenshot of the success toast
-    await takeEvidence(page, '.oxd-toast--success', '02_Transmitted_Success', jobId);
+      } catch (err) {
+        throw new Error(`Failed to load TestName '${rowData.TestName}': ${err.message}`);
+      }
+    } else if (rowData.Steps) {
+      // MODE 1: JSON Steps (Keep this exactly as it is)
+      let steps = typeof rowData.Steps === 'string' ? JSON.parse(rowData.Steps) : rowData.Steps;
+      
+      for (const step of steps) {
+        const action = step.action.toLowerCase();
+        let value = step.value || '';
+
+        if (value.startsWith('{{') && value.endsWith('}}')) {
+          const envKey = value.replace('{{', '').replace('}}', '');
+          value = process.env[envKey] || value;
+        }
+
+        switch (action) {
+          case 'goto': await page.goto(step.selector, { timeout: 30000 }); break;
+          case 'app_login':
+            await page.goto(process.env.STAGE_URL, { timeout: 30000 });
+            await page.fill('input[name="username"]', process.env.STAGE_USERNAME);
+            await page.fill('input[name="password"]', process.env.STAGE_PASSWORD);
+            await page.click('button[type="submit"]');
+            await page.waitForSelector('.oxd-topbar-header-breadcrumb', { timeout: 20000 });
+            break;
+          case 'fill': await page.waitForSelector(step.selector); await page.fill(step.selector, value.toString()); break;
+          case 'click': await page.waitForSelector(step.selector); await page.click(step.selector); break;
+          case 'wait': await page.waitForTimeout(parseInt(value) || 1000); break;
+          case 'waitforurl': await page.waitForURL(value, { timeout: 15000 }); break;
+          case 'waitforselector': await page.waitForSelector(step.selector, { state: 'visible', timeout: 15000 }); break;
+          case 'screenshot': await takeEvidence(page, step.selector, value || 'Screenshot', jobId); break;
+          default: throw new Error(`Unknown action: '${step.action}'`);
+        }
+      }
+      result = { status: 'Passed', message: 'Completed JSON steps' };
+    } else {
+      throw new Error("Must provide either 'TestName' or 'Steps' in JSON.");
+    }
 
     return { 
-      status: 'Passed', 
-      message: `Employee ${firstNameToCreate} created successfully`,
+      ...result, // Returns status, message, and extractedData
       duration: ((Date.now() - startTime) / 1000).toFixed(1) + 's'
     };
 
   } catch (error) {
-    try {
-      await page.screenshot({ path: path.join(evidenceDir, '99_Failure_State.png'), fullPage: true });
-    } catch (e) {}
-
-    return { 
-      status: 'Failed', 
-      message: error.message.split('\n')[0], 
-      duration: ((Date.now() - startTime) / 1000).toFixed(1) + 's'
-    };
+    try { await page.screenshot({ path: path.join(evidenceDir, '99_Failure_State.png'), fullPage: true }); } catch (e) {}
+    return { status: 'Failed', message: error.message.split('\n')[0], duration: ((Date.now() - startTime) / 1000).toFixed(1) + 's' };
   } finally {
     activeBrowsers.delete(browser);
     await browser.close();
@@ -240,10 +292,8 @@ async function runJob(rowData, jobId) {
 }
 
 async function stopAllBrowsers() {
-  for (const browser of activeBrowsers) {
-    try { await browser.close(); } catch (e) {}
-  }
+  for (const browser of activeBrowsers) { try { await browser.close(); } catch (e) {} }
   activeBrowsers.clear();
 }
 
-module.exports = { runJob, stopAllBrowsers };
+module.exports = { runJob, stopAllBrowsers, takeEvidence };
