@@ -3,7 +3,7 @@ const fs = require('fs');
 const path = require('path');
 
 // This is the function our automation.js router calls
-async function runCreateCreditProject(page, rowData, jobId) {
+async function runcreateCreditProject(page, rowData, jobId) {
   console.log(`[${jobId}] Running Custom JS Test for ${rowData.ProjectName}`);
 
   // 1. Login
@@ -44,4 +44,4 @@ async function runCreateCreditProject(page, rowData, jobId) {
   };
 }
 
-module.exports = { runCreateCreditProject };
+module.exports = { runcreateCreditProject };
