@@ -1,9 +1,12 @@
+require('dotenv').config();
 const express = require('express');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
+const AdmZip = require('adm-zip'); // <-- NEW ZIP LIBRARY
+
 const { readInput, writeReport } = require('./dataHandler');
-const { runJob } = require('./automation');
+const { runJob, stopAllBrowsers } = require('./automation');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -20,8 +23,6 @@ fs.mkdirSync(EVIDENCE_DIR, { recursive: true });
 // ---------- Middleware & Static Files ----------
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
-
-// Serve evidence folder statically so the UI can load images
 app.use('/evidence', express.static(EVIDENCE_DIR));
 
 // ---------- Multer Config ----------
@@ -33,23 +34,24 @@ const storage = multer.diskStorage({
   }
 });
 
-const ALLOWED_EXT = new Set(['.xlsx', '.json']);
 const upload = multer({
   storage,
   limits: { fileSize: 20 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
     const ext = path.extname(file.originalname).toLowerCase();
-    if (!ALLOWED_EXT.has(ext)) return cb(new Error('Only .xlsx and .json files are allowed'));
+    if (!['.xlsx', '.json'].includes(ext)) return cb(new Error('Only .xlsx and .json allowed'));
     cb(null, true);
   }
 });
 
-// ---------- Global Status ----------
+// ---------- Global State ----------
 const statusState = {
-  status: 'idle', // 'idle', 'processing', 'Running', 'error'
+  status: 'idle',
   logs: [],
   parsedData: [],
-  batchProgress: [] // Holds ALL jobs for the UI history
+  batchProgress: [],
+  totalJobs: 0,
+  completedJobs: 0
 };
 
 function addLog(message) {
@@ -57,13 +59,8 @@ function addLog(message) {
 }
 
 // ---------- Routes ----------
+app.get('/api/status', (req, res) => res.json(statusState));
 
-// 1. Status Endpoint
-app.get('/api/status', (req, res) => {
-  res.json(statusState);
-});
-
-// 2. Upload Endpoint
 app.post('/api/upload', upload.single('file'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded.' });
 
@@ -71,126 +68,161 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
   statusState.status = 'processing';
   statusState.parsedData = [];
   statusState.batchProgress = [];
+  statusState.totalJobs = 0;
+  statusState.completedJobs = 0;
 
-  res.json({ ok: true, message: 'File uploaded.' });
+  res.json({ ok: true });
 
   try {
     const rows = await readInput(req.file.path);
     addLog(`Parsed ${rows.length} rows.`);
 
-    // Map strictly to ProjectName and Environment
-    const results = rows.map((row, index) => {
-      return {
-        ProjectName: row.ProjectName || row.name || row.Name || `Project ${index + 1}`,
-        Environment: row.Environment || row.environment || row.Env || row.env || 'N/A'
-      };
-    });
+    const results = rows.map((row, index) => ({
+      ProjectName: row.ProjectName || row.name || row.Name || `Project ${index + 1}`,
+      Environment: row.Environment || row.environment || row.Env || row.env || 'N/A',
+      Office: row.Office || row.office || 'N/A',
+      TestName: row.TestName || 'CreateEmployee',
+      InputValue: row.InputValue || row.ProjectName || 'Default'
+    }));
 
     statusState.parsedData = results;
+    statusState.totalJobs = results.length;
     statusState.status = 'idle';
-    addLog('Data ready for automation.');
   } catch (err) {
     statusState.status = 'error';
-    addLog(`Error processing file: ${err.message}`);
+    addLog(`Error: ${err.message}`);
   }
 });
 
-// 3. Start Batch Process
 app.post('/api/start', async (req, res) => {
-  if (statusState.status === 'Running') {
-    return res.status(400).json({ error: 'A job is already running' });
-  }
+  if (statusState.status === 'Running') return res.status(400).json({ error: 'Already running' });
 
   const rows = statusState.parsedData;
-  if (!rows || rows.length === 0) {
-    return res.status(400).json({ error: 'No data available. Upload a file first.' });
-  }
+  if (!rows || rows.length === 0) return res.status(400).json({ error: 'No data.' });
 
   statusState.status = 'Running';
-  statusState.batchProgress = []; // Reset UI history for the new run
-  res.json({ ok: true, message: 'Batch process started' });
+  statusState.batchProgress = [];
+  statusState.completedJobs = 0;
+  res.json({ ok: true });
 
   try {
     const BATCH_SIZE = 4;
     const allResults = [];
 
-    // Iterate through rows in chunks of 4
     for (let i = 0; i < rows.length; i += BATCH_SIZE) {
+      if (statusState.status !== 'Running') {
+        addLog(`Batch process stopped by user.`);
+        break;
+      }
+
       const batch = rows.slice(i, i + BATCH_SIZE);
       addLog(`Starting Batch ${Math.floor(i / BATCH_SIZE) + 1} (${batch.length} jobs)`);
 
-      // Create the cards and ADD them to the master list so they stay on screen
       const newBatchCards = batch.map((row, index) => ({
         jobId: `Job_${i + index + 1}`,
         projectName: row.ProjectName,
         environment: row.Environment,
-        status: 'Running'
+        status: 'Running',
+        duration: ''
       }));
       statusState.batchProgress.push(...newBatchCards);
 
-      // Run the current batch in parallel
       const batchPromises = batch.map(async (row, index) => {
+        if (statusState.status !== 'Running') return null;
+
         const jobId = `Job_${i + index + 1}`;
-        
-        // Run Playwright
         const result = await runJob(row, jobId);
         
-        // Update the specific job card in the master list (global index i + index)
         statusState.batchProgress[i + index].status = result.status;
-        
-        // --- NEW: Log the result to the UI Terminal ---
+        statusState.batchProgress[i + index].duration = result.duration;
+        statusState.completedJobs++;
+
         if (result.status === 'Failed') {
           addLog(`❌ ${jobId} (${row.ProjectName}) FAILED: ${result.message}`);
         } else {
-          addLog(`✅ ${jobId} (${row.ProjectName}) Passed`);
+          addLog(`✅ ${jobId} (${row.ProjectName}) Passed [${result.duration}]`);
         }
-        // Return the enriched row for the final Excel report
+        
         return { 
           "Job Name": jobId, 
           "Project Name": row.ProjectName, 
           "Environment": row.Environment, 
-          "Status": result.status 
+          "Status": result.status,
+          "Office": row.Office
         };
       });
 
-      // CRUCIAL: Wait for all 4 in this batch to finish before looping to the next
       const batchResults = await Promise.all(batchPromises);
-      allResults.push(...batchResults);
-      
-      addLog(`Batch ${Math.floor(i / BATCH_SIZE) + 1} completed`);
+      allResults.push(...batchResults.filter(r => r !== null));
     }
 
-    // ---------- Generate Final Report ----------
-    addLog(`All jobs complete. Generating final report...`);
+    addLog(`Generating final report...`);
     const reportPath = path.join(REPORT_DIR, 'Final_Report.xlsx');
-    
     await writeReport(allResults, reportPath);
 
     statusState.status = 'idle';
-    addLog(`Final report generated successfully!`);
+    addLog(`Process finished.`);
 
   } catch (err) {
     statusState.status = 'error';
-    addLog(`Batch process failed: ${err.message}`);
+    addLog(`Batch failed: ${err.message}`);
   }
 });
 
-// 4. Download Report Endpoint
+app.post('/api/stop', async (req, res) => {
+  if (statusState.status !== 'Running') return res.json({ ok: true });
+  
+  statusState.status = 'Stopping';
+  addLog('Stop requested. Killing active browsers...');
+  await stopAllBrowsers();
+  
+  statusState.status = 'idle';
+  res.json({ ok: true });
+});
+
 app.get('/api/download-report', (req, res) => {
   const reportPath = path.join(REPORT_DIR, 'Final_Report.xlsx');
   if (fs.existsSync(reportPath)) {
     res.download(reportPath, 'Final_Report.xlsx');
   } else {
-    res.status(404).send('Report not found. Run a batch first.');
+    res.status(404).send('Report not found.');
   }
 });
 
-// Global Error Handler
-app.use((err, req, res, next) => {
-  res.status(400).json({ error: err.message });
+// --- 6. Download Evidence as ZIP (adm-zip Method) ---
+app.get('/api/download-evidence', (req, res) => {
+  const evidencePath = path.join(__dirname, 'evidence');
+  
+  if (!fs.existsSync(evidencePath) || fs.readdirSync(evidencePath).length === 0) {
+    return res.status(404).send('No evidence found to download.');
+  }
+
+  try {
+    // This creates the zip file in memory instantly. No streams, no crashes.
+    const zip = new AdmZip();
+    zip.addLocalFolder(evidencePath);
+    const zipBuffer = zip.toBuffer();
+    
+    res.set('Content-Type', 'application/zip');
+    res.set('Content-Disposition', `attachment; filename="Evidence_${Date.now()}.zip"`);
+    res.send(zipBuffer);
+  } catch (err) {
+    console.error("ZIP Error:", err);
+    res.status(500).send("Failed to create zip file: " + err.message);
+  }
 });
 
-// ---------- Start Server ----------
-app.listen(PORT, () => {
-  console.log(`Server running at http://localhost:${PORT}`);
+// 7. Delete Evidence Folder
+app.delete('/api/delete-evidence', (req, res) => {
+  const evidencePath = path.join(__dirname, 'evidence');
+  
+  if (fs.existsSync(evidencePath)) {
+    const files = fs.readdirSync(evidencePath);
+    for (const file of files) {
+      fs.rmSync(path.join(evidencePath, file), { recursive: true, force: true });
+    }
+  }
+  res.json({ ok: true, message: 'Evidence cleared successfully' });
 });
+
+app.listen(PORT, () => console.log(`Server running at http://localhost:${PORT}`));
