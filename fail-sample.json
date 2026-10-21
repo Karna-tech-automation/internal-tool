@@ -1,0 +1,7 @@
+[
+  { "ProjectName": "Alpha_Project", "Environment": "QA" },
+  { "ProjectName": "FAIL_JOB", "Environment": "QA" },
+  { "ProjectName": "Charlie_Project", "Environment": "QA" },
+  { "ProjectName": "FAIL_JOB", "Environment": "QA" },
+  { "ProjectName": "Echo_Project", "Environment": "QA" }
+]
