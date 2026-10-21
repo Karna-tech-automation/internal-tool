@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Internal Tool</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 720px; margin: 40px auto; padding: 0 16px; }
+    h1 { margin-bottom: 8px; }
+    section { border: 1px solid #ddd; border-radius: 8px; padding: 16px; margin-bottom: 16px; }
+    h2 { margin-top: 0; font-size: 16px; }
+    button { padding: 6px 14px; cursor: pointer; }
+    pre { background: #f5f5f5; padding: 12px; border-radius: 6px; overflow: auto; font-size: 13px; }
+    #uploadMsg { font-size: 14px; color: #333; min-height: 20px; }
+  </style>
+</head>
+<body>
+  <h1>Internal Tool</h1>
+
+  <section>
+    <h2>Upload file (.xlsx or .json)</h2>
+    <input type="file" id="fileInput" accept=".xlsx,.json" />
+    <button id="uploadBtn">Upload</button>
+    <p id="uploadMsg"></p>
+  </section>
+
+  <section>
+    <h2>Status (polling every 3s)</h2>
+    <pre id="statusBox">Loading…</pre>
+  </section>
+
+  <script>
+    const fileInput = document.getElementById('fileInput');
+    const uploadBtn = document.getElementById('uploadBtn');
+    const uploadMsg = document.getElementById('uploadMsg');
+    const statusBox = document.getElementById('statusBox');
+
+    uploadBtn.addEventListener('click', async () => {
+      const file = fileInput.files[0];
+      if (!file) { uploadMsg.textContent = 'Pick a file first.'; return; }
+
+      const formData = new FormData();
+      formData.append('file', file);   // field name MUST be "file"
+
+      uploadMsg.textContent = 'Uploading…';
+      try {
+        const res = await fetch('/api/upload', { method: 'POST', body: formData });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Upload failed');
+        uploadMsg.textContent = `Saved as ${data.file.savedAs} (${data.file.size} bytes)`;
+        fileInput.value = '';
+      } catch (err) {
+        uploadMsg.textContent = 'Error: ' + err.message;
+      }
+    });
+
+    async function pollStatus() {
+      try {
+        const res = await fetch('/api/status');
+        const data = await res.json();
+        statusBox.textContent = JSON.stringify(data, null, 2);
+      } catch (err) {
+        statusBox.textContent = 'Status fetch failed: ' + err.message;
+      }
+    }
+
+    pollStatus();
+    setInterval(pollStatus, 3000);
+  </script>
+</body>
+</html>
